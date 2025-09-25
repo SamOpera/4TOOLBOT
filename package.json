@@ -1,0 +1,50 @@
+{
+  "name": "4tool-trading-bot",
+  "version": "1.0.0",
+  "description": "Autonomous Solana trading bot with fee sharing model",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js --ignore 'db/*' --ignore 'logs/*'",
+    "wallet-api": "node wallet-api-server.js",
+    "wallet-api:dev": "nodemon wallet-api-server.js",
+    "test": "jest",
+    "test:wallet": "node test-wallet-holdings.js",
+    "test:integration": "node test-integration.js",
+    "test:webhook": "node test_webhook.js",
+    "validate:webhook": "node validate_webhook_config.js",
+    "wallet:test": "node test-helius-wallet.js",
+    "wallet:cli": "node wallet-cli.js"
+  },
+  "dependencies": {
+    "@project-serum/anchor": "^0.26.0",
+    "@raydium-io/raydium-sdk-v2": "^0.2.18-alpha",
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.87.6",
+    "axios": "^1.6.2",
+    "better-sqlite3": "^11.10.0",
+    "bs58": "^6.0.0",
+    "bull": "^4.16.5",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "decimal.js": "^10.4.3",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "fs-extra": "^11.3.0",
+    "html-pdf-node": "^1.0.8",
+    "ioredis": "^5.6.1",
+    "json2csv": "^6.0.0-alpha.2",
+    "lru-cache": "^10.1.0",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^3.3.2",
+    "node-telegram-bot-api": "^0.64.0",
+    "winston": "^3.11.0",
+    "ws": "^8.18.2"
+  },
+  "devDependencies": {
+    "eslint": "^8.55.0",
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.10"
+  }
+}
