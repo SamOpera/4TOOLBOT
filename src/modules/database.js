@@ -391,6 +391,11 @@ class DatabaseManager {
         return stmt.get(userId);
     }
 
+    async getUserById(userId) {
+        const stmt = this.db.prepare('SELECT * FROM users WHERE id = ?');
+        return stmt.get(userId);
+    }
+
     async getWalletById(walletId, userId = null) {
         if (userId) {
             // If userId is provided, ensure the wallet belongs to that user
@@ -442,6 +447,26 @@ class DatabaseManager {
             throw error;
         }
     }
+
+    // Withdrawal operation: Logs a withdrawal transaction into the trades table
+    async insertWithdrawal(withdrawalData) {
+        // We log withdrawal as a distinct 'WITHDRAW' side in the trades table for tracking.
+        
+        const stmt = this.db.prepare(
+            `INSERT INTO trades (user_id, token_address, amount, price, side, timestamp) 
+             VALUES (?, ?, ?, ?, 'WITHDRAW', ?)`
+        );
+        
+        const result = stmt.run(
+            withdrawalData.user_id, 
+            withdrawalData.token_mint, // Using mint as the token address
+            withdrawalData.amount, 
+            0, // Price is 0 as it's a transfer, not a trade execution
+            new Date().toISOString()
+        );
+        return result;
+    }
+
 
     // Strategy operations
     createStrategy(userId, strategyJson) {

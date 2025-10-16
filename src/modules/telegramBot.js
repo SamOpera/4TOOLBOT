@@ -10,6 +10,7 @@ const RulesCommand = require('../commands/rules');
 const RuleEngine = require('../services/ruleEngine');
 const FileExportService = require('../services/fileExportService');
 const AutonomousService = require('../services/autonomousService');
+const WithdrawHandlers = require('../handlers/withdrawHandlers');
 const {
     WalletHandlers,
     PortfolioHandlers,
@@ -60,44 +61,58 @@ class TelegramBotManager {
             throw new Error(`Failed to initialize Telegram bot: ${error.message}`);
         }
     }
+initializeWithBot(config) {
+    // Instantiate services and handlers that require a live bot instance
+    this.autonomousService = new AutonomousService(config, this.ruleEngine, this.bot);
+    const MessageDispatcher = require('../utils/messageDispatcher');
+    this.dispatcher = new MessageDispatcher(this.bot, { maxConcurrent: 10, minIntervalMs: 40 });
+    this.messageManager = new MessageManager(this.bot);
+    this.menuManager = new MenuManager(this.bot, this.db, this.messageManager);
+    this.rulesCommand = new RulesCommand(this.bot, this.db, config);
+    this.rulesManager = new RulesManager(this.bot, this.db, this.messageManager, this.rulesCommand);
+    this.sellManager = new SellManager(config, this.tradingExecution, this.db, this.messageManager);
 
-    initializeWithBot(config) {
-        // Instantiate services and handlers that require a live bot instance
-            this.autonomousService = new AutonomousService(config, this.ruleEngine, this.bot);
-            const MessageDispatcher = require('../utils/messageDispatcher');
-            this.dispatcher = new MessageDispatcher(this.bot, { maxConcurrent: 10, minIntervalMs: 40 });
-            this.messageManager = new MessageManager({
-                sendMessage: (chatId, message, options) => this.dispatcher.send(chatId, message, options)
-            });
-            this.menuManager = new MenuManager(this.bot, this.db, this.messageManager);
-        this.rulesCommand = new RulesCommand(this.bot, this.db, config);
-            this.rulesManager = new RulesManager(this.bot, this.db, this.messageManager, this.rulesCommand);
-            this.sellManager = new SellManager(config, this.tradingExecution, this.db, this.messageManager);
+    this.walletHandlers = new WalletHandlers(this.bot, this.db, config);
+    this.portfolioHandlers = new PortfolioHandlers(this.bot, this.db, config);
+    this.tradingHandlers = new TradingHandlers(this.bot, this.db, config, this.sellManager);
+    this.strategyHandlers = new StrategyHandlers(this.bot, this.db, config);
+    this.ruleHandlers = new RuleHandlers(this.bot, this.db, config);
+    this.exportHandlers = new ExportHandlers(this.bot, this.db, config);
+    this.securityHandlers = new SecurityHandlers(this, this.db, config);
+    this.copyTradeHandlers = new CopyTradeHandlers(this.bot, this.db, config);
+    this.settingsHandlers = new SettingsHandlers(this.bot, this.db, config, this, this.autonomousService);
 
-            this.walletHandlers = new WalletHandlers(this.bot, this.db, config);
-            this.portfolioHandlers = new PortfolioHandlers(this.bot, this.db, config);
-            this.tradingHandlers = new TradingHandlers(this.bot, this.db, config, this.sellManager);
-            this.strategyHandlers = new StrategyHandlers(this.bot, this.db, config);
-            this.ruleHandlers = new RuleHandlers(this.bot, this.db, config);
-            this.exportHandlers = new ExportHandlers(this.bot, this.db, config);
-            this.securityHandlers = new SecurityHandlers(this, this.db, config);
-            this.copyTradeHandlers = new CopyTradeHandlers(this.bot, this.db, config);
-            this.settingsHandlers = new SettingsHandlers(this.bot, this.db, config, this, this.autonomousService);
+    // Define Solana config here (edit as needed)
+    const solanaConfig = {
+        rpcUrl: "https://api.mainnet-beta.solana.com",
+        feeLamports: 5000,
+        adminChatId: null,
+        heliusApiKey: null // or your real API key
+    };
 
-            this.callbackRouter = new CallbackRouter(this.bot, {
-                walletHandlers: this.walletHandlers,
-                portfolioHandlers: this.portfolioHandlers,
-                tradingHandlers: this.tradingHandlers,
-                strategyHandlers: this.strategyHandlers,
-                ruleHandlers: this.ruleHandlers,
-                exportHandlers: this.exportHandlers,
-                securityHandlers: this.securityHandlers,
-                copyTradeHandlers: this.copyTradeHandlers,
-                settingsHandlers: this.settingsHandlers,
-                rulesCommand: this.rulesCommand,
-                bot: this 
-            });
-    }
+    // Pass the solanaConfig as the fourth argument
+    this.withdrawHandlers = new WithdrawHandlers(
+        this.bot,
+        this.db,
+        this.messageManager,
+        solanaConfig,
+        this
+    );
+
+    this.callbackRouter = new CallbackRouter(this.bot, {
+        walletHandlers: this.walletHandlers,
+        portfolioHandlers: this.portfolioHandlers,
+        tradingHandlers: this.tradingHandlers,
+        strategyHandlers: this.strategyHandlers,
+        ruleHandlers: this.ruleHandlers,
+        exportHandlers: this.exportHandlers,
+        securityHandlers: this.securityHandlers,
+        copyTradeHandlers: this.copyTradeHandlers,
+        settingsHandlers: this.settingsHandlers,
+        rulesCommand: this.rulesCommand,
+        bot: this 
+    });
+}
 
     async reconnectBot() {
         console.log('Reconnection logic not applicable in webhook-only mode');
@@ -254,6 +269,7 @@ class TelegramBotManager {
     // Handle commands
     async handleCommand(msg) {
         const chatId = msg.chat.id;
+        const telegramId = msg.from.id.toString();
         const command = msg.text.split(' ')[0];
 
         try {
@@ -262,7 +278,43 @@ class TelegramBotManager {
                     await this.handleStartCommand(msg);
                     break;
                 case '/help':
-                    await this.bot.sendMessage(chatId, 'Help command - coming soon!');
+                    await this.showHelp(chatId);
+                    break;
+                case '/wallet':
+                    await this.showWalletManagement(chatId, telegramId);
+                    break;
+                case '/strategy':
+                    await this.handleStrategies(chatId, telegramId);
+                    break;
+                case '/portfolio':
+                    if (this.portfolioHandlers && this.portfolioHandlers.handleViewPortfolio) {
+                        await this.portfolioHandlers.handleViewPortfolio(chatId, telegramId);
+                    } else {
+                        await this.bot.sendMessage(chatId, 'Portfolio feature is coming soon!');
+                    }
+                    break;
+                case '/claim':
+                    await this.handleClaimRewards(chatId, telegramId);
+                    break;
+                case '/status':
+                    await this.bot.sendMessage(chatId, '4T-Bot status: 🟢 Online and running!');
+                    break;
+                case '/buy':
+                    if (this.tradingHandlers && this.tradingHandlers.handleBuyCommand) {
+                        await this.tradingHandlers.handleBuyCommand(chatId, telegramId);
+                    } else {
+                        await this.bot.sendMessage(chatId, 'Buy command coming soon!');
+                    }
+                    break;
+                case '/sell':
+                    if (this.tradingHandlers && this.tradingHandlers.handleSellCommand) {
+                        await this.tradingHandlers.handleSellCommand(chatId, telegramId);
+                    } else {
+                        await this.bot.sendMessage(chatId, 'Sell command coming soon!');
+                    }
+                    break;
+                case '/set':
+                    await this.showSettings(chatId, telegramId);
                     break;
                 default:
                     await this.bot.sendMessage(chatId, 'Unknown command. Use /start to begin.');
@@ -330,60 +382,66 @@ I'm your automated trading assistant for Solana tokens. To get started, you'll n
         }
     }
 
-    // Handle regular messages
-    async handleRegularMessage(msg) {
-        try {
-            // Additional validation for message structure
-            if (!msg || !msg.chat || !msg.chat.id || !msg.from || !msg.from.id) {
-                console.error('Invalid message structure in handleRegularMessage:', {
-                    hasMsg: !!msg,
-                    hasChat: !!(msg && msg.chat),
-                    hasChatId: !!(msg && msg.chat && msg.chat.id),
-                    hasFrom: !!(msg && msg.from),
-                    hasFromId: !!(msg && msg.from && msg.from.id),
-                    message: msg
-                });
-                return;
-            }
-            
-            const chatId = msg.chat.id;
-            const telegramId = msg.from.id.toString();
-            const messageText = msg.text || '';
-            
-            console.log('Regular message received:', messageText);
-            
-            // Create context object for handlers
-            const ctx = {
-                chat: msg.chat,
-                from: msg.from,
+   // Handle regular messages
+async handleRegularMessage(msg) {
+    try {
+        // Additional validation for message structure
+        if (!msg || !msg.chat || !msg.chat.id || !msg.from || !msg.from.id) {
+            console.error('Invalid message structure in handleRegularMessage:', {
+                hasMsg: !!msg,
+                hasChat: !!(msg && msg.chat),
+                hasChatId: !!(msg && msg.chat && msg.chat.id),
+                hasFrom: !!(msg && msg.from),
+                hasFromId: !!(msg && msg.from && msg.from.id),
                 message: msg
-            };
-            
-            // Get user state
-            const userState = this.bot.userStates.get(telegramId);
-            
-            // Try to handle message through various handlers
-            let handled = false;
-            
-            // Try wallet handlers first (for wallet addresses, private keys, etc.)
-            if (this.walletHandlers && this.walletHandlers.handleMessage) {
-                try {
-                    const walletResult = await this.walletHandlers.handleMessage(ctx, userState);
-                    if (walletResult && (walletResult.handled || walletResult === true)) {
-                        handled = true;
-                        console.log('Message handled by wallet handlers');
-                        
-                        // Clear user state if requested
-                        if (walletResult.clearState && userState) {
-                            this.bot.userStates.delete(telegramId);
-                            console.log('User state cleared');
-                        }
+            });
+            return;
+        }
+
+        const chatId = msg.chat.id;
+        const telegramId = msg.from.id.toString();
+        const messageText = msg.text || '';
+
+        // Get user state BEFORE you use it!
+        const userState = this.bot.userStates.get(telegramId);
+
+        // Withdrawal flow: let withdrawHandlers manage withdrawal states
+        if (userState && this.withdrawHandlers && typeof this.withdrawHandlers.handleMessage === 'function') {
+            const ctx = { chat: msg.chat, from: msg.from, message: msg };
+            const handled = await this.withdrawHandlers.handleMessage(ctx);
+            if (handled) return;
+        }
+
+        console.log('Regular message received:', messageText);
+
+        // Create context object for handlers
+        const ctx = {
+            chat: msg.chat,
+            from: msg.from,
+            message: msg
+        };
+
+        // Try to handle message through various handlers
+        let handled = false;
+
+        // Try wallet handlers first (for wallet addresses, private keys, etc.)
+        if (this.walletHandlers && this.walletHandlers.handleMessage) {
+            try {
+                const walletResult = await this.walletHandlers.handleMessage(ctx, userState);
+                if (walletResult && (walletResult.handled || walletResult === true)) {
+                    handled = true;
+                    console.log('Message handled by wallet handlers');
+
+                    // Clear user state if requested
+                    if (walletResult.clearState && userState) {
+                        this.bot.userStates.delete(telegramId);
+                        console.log('User state cleared');
                     }
-                } catch (error) {
-                    console.error('Error in wallet handlers:', error);
                 }
+            } catch (error) {
+                console.error('Error in wallet handlers:', error);
             }
-            
+}
             // Try settings handlers
             if (!handled && this.settingsHandlers && this.settingsHandlers.handleMessage) {
                 try {
@@ -494,16 +552,7 @@ I received your message: \`${messageText}\`
         }
     }
 
-    // Handle callback queries
-    async handleCallbackQuery(callbackQuery) {
-        try {
-            await this.callbackRouter.handleCallbackQuery(callbackQuery);
-        } catch (error) {
-            console.error('Error handling callback query:', error);
-            await this.bot.answerCallbackQuery(callbackQuery.id, 'Sorry, something went wrong.');
-        }
-    }
-
+  
     // Handle inline queries
     async handleInlineQuery(inlineQuery) {
         // Implement inline query handling if needed
@@ -1162,37 +1211,91 @@ Select the criteria for your filter rule:`;
         });
     }
 
-    // All callback handling delegated to CallbackRouter
-    async handleCallbackQuery(ctx) {
-        await this.callbackRouter.handleCallbackQuery(ctx);
-    }
 
-    async handleOtherCallbacks(ctx) {
-        // Simplified callback handling for remaining methods
+
+    // All callback handling delegated to CallbackRouter, but with custom actions first
+    // --- Handle Rewards button ---
+ async handleCallbackQuery(ctx) {
         const chatId = ctx.chat.id;
         const telegramId = ctx.from.id.toString();
-        const action = ctx.callbackQuery.data;
+        const callbackData = ctx.callbackQuery.data;
 
         try {
-            if (action === 'main_menu') {
-                await this.showMainMenu(chatId);
-                return;
+            // Fetch user and wallet data first, as it's required for menu navigation
+            const user = await this.db.getUserByTelegramId(telegramId);
+            const activeWallet = user ? await this.db.getActiveWallet(user.id) : null;
+            
+            // --- Handle Universal Navigation (Main Menu, Wallet Management) ---
+            if (callbackData === 'main_menu' || callbackData === 'wallet_management') {
+                if (callbackData === 'wallet_management') {
+                    // Navigate to wallet management screen
+                    await this.showWalletManagement(chatId, telegramId);
+                } else if (activeWallet && this.menuManager) {
+                    // Navigate to Main Menu (requires activeWallet)
+                    await this.menuManager.showMainMenu(chatId, activeWallet, this.ruleEngine, telegramId);
+                } else {
+                    // If no wallet, redirect to start/onboarding
+                    await this.handleStartCommand(ctx.message || { chat: { id: chatId }, from: { id: telegramId } });
+                }
+                
+                // Acknowledge the callback query to dismiss the loading clock
+                if (this.bot && this.bot.answerCallbackQuery) {
+                    await this.bot.answerCallbackQuery(ctx.callbackQuery.id);
+                }
+                return; 
             }
 
-            if (action === 'settings') {
-                await this.showSettings(chatId, telegramId);
-                return;
+            // --- Handle Custom Actions (Rewards, Withdraw, Token Selection) ---
+
+            if (callbackData === 'rewards') {
+                await this.handleClaimRewards(chatId, telegramId);
             }
 
-            // Log unhandled actions
-            console.warn('Unhandled callback action:', action);
-            await this.bot.sendMessage(chatId, 'Sorry, this action is not supported. Please try again.');
+            // In TelegramBotManager.js, inside the handleCallbackQuery(ctx) function
+
+            // ... (Handling universal navigation: 'main_menu', 'wallet_management')
+
+            // --- Handle Withdraw button ---
+            if (callbackData === 'withdraw') {
+                await this.withdrawHandlers.handleWithdrawStart(chatId, telegramId);
+                
+                // CRITICAL FIX: Acknowledge the callback and RETURN to stop further routing
+                if (this.bot && this.bot.answerCallbackQuery) {
+                    await this.bot.answerCallbackQuery(ctx.callbackQuery.id);
+                }
+                return; 
+            }
+
+            // --- Handle token selection for withdrawal ---
+            if (callbackData.startsWith('withdraw_token_')) {
+                await this.withdrawHandlers.handleCallbackQuery(ctx);
+                
+                // CRITICAL FIX: Acknowledge the callback and RETURN to stop further routing
+                if (this.bot && this.bot.answerCallbackQuery) {
+                    await this.bot.answerCallbackQuery(ctx.callbackQuery.id);
+                }
+                return; 
+            }
+            
+            // ... (rest of the logic, like 'rewards', 'settings', etc., should also return after acknowledging)
+            
+            // --- DELEGATE TO ROUTER FOR EVERYTHING ELSE (Trading, Strategy, Security) ---
+            await this.callbackRouter.handleCallbackQuery(ctx);
+            
+            // Acknowledge callback for all actions handled successfully above
+            if (this.bot && this.bot.answerCallbackQuery) {
+                await this.bot.answerCallbackQuery(ctx.callbackQuery.id);
+            }
 
         } catch (error) {
-            console.error('Error handling other callbacks:', error);
-            await this.bot.sendMessage(chatId, 'Sorry, there was an error processing your request. Please try again.');
+            console.error('Error handling callback query:', error);
+            // Ensure callback is answered on failure to clear the user's loading clock
+            if (this.bot && this.bot.answerCallbackQuery) {
+                await this.bot.answerCallbackQuery(ctx.callbackQuery.id, 'Sorry, an error occurred processing your request.');
+            }
         }
     }
+
 
     async showStrategyMenu(chatId, telegramId) {
         try {

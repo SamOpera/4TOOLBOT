@@ -1,3 +1,14 @@
+// NOTE: You need to create the following table in your DB for per-token 24h changes:
+/*
+CREATE TABLE IF NOT EXISTS token_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    token_symbol TEXT NOT NULL,
+    usd_value REAL NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+*/
+
 // Fee Management Operations
 class FeeOperations {
     constructor(db) {
@@ -270,12 +281,41 @@ class PortfolioOperations {
         const row = stmt.get(userId);
         return row ? row.value : null;
     }
+
+    // --- NEW: Save per-token USD values for each snapshot ---
+    async saveTokenSnapshots(userId, tokenValues) {
+        // tokenValues: { "SOL": 4.67, "XBT": 0.22, ... }
+        const stmt = this.db.db.prepare(
+            'INSERT INTO token_snapshots (user_id, token_symbol, usd_value, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)'
+        );
+        for (const [symbol, value] of Object.entries(tokenValues)) {
+            stmt.run(userId, symbol, value);
+        }
+    }
+
+    // --- NEW: Get per-token USD value from 24h ago for each token ---
+    async getTokenValues24hAgo(userId) {
+        // Returns { "SOL": 4.67, "XBT": 0.22, ... }
+        const stmt = this.db.db.prepare(
+            `SELECT token_symbol, usd_value
+             FROM token_snapshots
+             WHERE user_id = ? AND timestamp <= datetime('now', '-24 hours')
+             ORDER BY token_symbol, timestamp DESC`
+        );
+        const rows = stmt.all(userId);
+        const tokenMap = {};
+        for (const row of rows) {
+            if (!tokenMap[row.token_symbol]) {
+                tokenMap[row.token_symbol] = row.usd_value;
+            }
+        }
+        return tokenMap;
+    }
 }
 
 // Add to exports
 module.exports = {
-    // ... existing exports ...
     FeeOperations,
     StrategyOperations,
     PortfolioOperations
-}; 
+};

@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const bs58Module = require('bs58');
+const bs58 = bs58Module.default || bs58Module;
 const TelegramErrorHandler = require('../utils/telegramErrorHandler');
 
 class WalletHandlers {
@@ -89,8 +91,6 @@ The wallet has been added to your monitored list. You can now enable copy tradin
                 }
             }
 
-            // Clear user state - handled in main handleMessage method
-
         } catch (error) {
             console.error('Error handling external wallet input:', error);
             await this.sendAndStoreMessage(chatId, 'Sorry, there was an error adding the external wallet.');
@@ -98,54 +98,59 @@ The wallet has been added to your monitored list. You can now enable copy tradin
     }
 
     async handleCreateWallet(chatId, telegramId) {
-        try {
-            const wallet = await this.generateWallet();
-            const encryptedKey = this.encryptPrivateKey(wallet.privateKey, telegramId);
-            
-            const user = await this.db.getUserByTelegramId(telegramId);
-            await this.db.createWallet(user.id, wallet.publicKey, encryptedKey, {
-                is_locked: false,
-                is_active: true
-            });
+    try {
+        const wallet = await this.generateWallet();
+        const encryptedKey = this.encryptPrivateKey(JSON.stringify(wallet.privateKey), telegramId);
+        
+        const user = await this.db.getUserByTelegramId(telegramId);
+        await this.db.createWallet(user.id, wallet.publicKey, encryptedKey, {
+            is_locked: false,
+            is_active: true
+        });
 
-            const message = `
+        // Create the base58 version for wallet import
+        const privateKeyBase58 = bs58.encode(Uint8Array.from(wallet.privateKey));
+
+        const message = `
 *🎉 New Wallet Created!*
 
 *Public Key:*
+
 \`${wallet.publicKey}\`
 
-*Private Key:*
-\`${wallet.privateKey}\`
+*Private Key (Base58, for Phantom/Sollet/Backpack):*
+
+\`${privateKeyBase58}\`
 
 ⚠️ *IMPORTANT:* 
+- Use the Base58 key above to import into wallets like Phantom, Sollet, Backpack, etc.
 - Save your private key securely
 - Never share it with anyone
 - It cannot be recovered if lost
 - Keep it in a safe place`;
 
-            const keyboard = {
-                inline_keyboard: [
-                    [
-                        { text: '✅ I\'ve Saved My Keys', callback_data: 'keys_saved' }
-                    ]
+        const keyboard = {
+            inline_keyboard: [
+                [
+                    { text: '✅ I\'ve Saved My Keys', callback_data: 'keys_saved' }
                 ]
-            };
+            ]
+        };
 
-            const sentMessage = await this.sendAndStoreMessage(chatId, message, {
-                parse_mode: 'Markdown',
-                reply_markup: keyboard
-            });
+        const sentMessage = await this.sendAndStoreMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard
+        });
 
-            this.lastWalletMessageId = sentMessage.message_id;
-        } catch (error) {
-            console.error('Error creating wallet:', error);
-            await this.sendAndStoreMessage(chatId, 'Sorry, something went wrong while creating your wallet.');
-        }
+        this.lastWalletMessageId = sentMessage.message_id;
+    } catch (error) {
+        console.error('Error creating wallet:', error);
+        await this.sendAndStoreMessage(chatId, 'Sorry, something went wrong while creating your wallet.');
     }
+}
 
     async handleImportWallet(chatId, telegramId) {
         try {
-            // Set the user state to indicate we're waiting for a private key
             this.bot.userStates.set(telegramId, {
                 state: 'awaiting_private_key',
                 data: {}
@@ -197,9 +202,7 @@ Please send your private key in one of these formats:
 
     async handlePrivateKeyImport(chatId, telegramId, privateKeyInput) {
         try {
-            // Check if user is in the correct state
-            const userState = this.bot.userStates.get(telegramId);
-            if (!userState || userState.state !== 'awaiting_private_key') {
+            if (!this.bot.userStates.get(telegramId) || this.bot.userStates.get(telegramId).state !== 'awaiting_private_key') {
                 await this.sendAndStoreMessage(chatId, 'Please use the import wallet option from the wallet management menu.');
                 return;
             }
@@ -212,17 +215,11 @@ Please send your private key in one of these formats:
             let privateKeyBuffer;
             let originalFormat = '';
             
-            // Try different formats in order of preference
-            const bs58Module = require('bs58');
-            const bs58 = bs58Module.default || bs58Module;
-            
             // 1. Try base58 format (most common for Solana private keys)
             if (!originalFormat && cleanInput.length >= 87 && cleanInput.length <= 88) {
                 try {
                     console.log('Attempting base58 decode...');
-                    // Check if it contains only valid base58 characters
                     if (/^[1-9A-HJ-NP-Za-km-z]+$/.test(cleanInput)) {
-                        console.log('String passes base58 character validation');
                         privateKeyBuffer = bs58.decode(cleanInput);
                         console.log('Base58 decode successful, buffer length:', privateKeyBuffer.length);
                         if (privateKeyBuffer.length === 64) {
@@ -230,7 +227,7 @@ Please send your private key in one of these formats:
                             console.log('✅ Detected base58 format');
                         } else {
                             console.log('❌ Base58 decode successful but wrong length:', privateKeyBuffer.length);
-                            privateKeyBuffer = null; // Reset for next attempt
+                            privateKeyBuffer = null;
                         }
                     } else {
                         console.log('❌ String contains invalid base58 characters');
@@ -306,15 +303,12 @@ Please send your private key in one of these formats:
             }
             
             console.log('✅ Format detection successful:', originalFormat);
-            
             console.log('Decoded private key buffer length:', privateKeyBuffer.length);
             
-            // Validate the private key length
             if (privateKeyBuffer.length !== 64) {
                 throw new Error(`Invalid private key length: ${privateKeyBuffer.length}, expected 64 bytes`);
             }
             
-            // Create Keypair from the private key
             const { Keypair } = require('@solana/web3.js');
             let keypair;
             try {
@@ -329,23 +323,20 @@ Please send your private key in one of these formats:
             console.log('Public Key:', publicKey);
             console.log('Original format:', originalFormat);
             
-            // Store the private key in the format it was received
-            const encryptedKey = this.encryptPrivateKey(cleanInput, telegramId);
+            const encryptedKey = this.encryptPrivateKey(JSON.stringify(Array.from(privateKeyBuffer)), telegramId);
             const user = await this.db.getUserByTelegramId(telegramId);
-            
+
             if (!user) {
                 throw new Error('User not found. Please try again.');
             }
             
             try {
-                // Create wallet with initial unlocked state
                 await this.db.createWallet(user.id, publicKey, encryptedKey, {
                     is_locked: false,
                     is_active: true
                 });
             } catch (error) {
                 if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-                    // Wallet already exists
                     const message = `
 *⚠️ Wallet Already Exists*
 
@@ -369,10 +360,9 @@ Would you like to switch to this wallet?`;
                     });
                     return;
                 }
-                throw error; // Re-throw if it's not a unique constraint error
+                throw error;
             }
 
-            // Clear the user state
             this.bot.userStates.delete(telegramId);
 
             const message = `
@@ -402,7 +392,6 @@ Your wallet has been imported and is ready to use.`;
                 reply_markup: keyboard
             });
 
-            // Delete the message containing the private key
             try {
                 await this.bot.deleteMessage(chatId, this.lastMessageIds.get(chatId));
             } catch (error) {
@@ -410,8 +399,6 @@ Your wallet has been imported and is ready to use.`;
             }
         } catch (error) {
             console.error('Error importing wallet:', error);
-            
-            // Provide more helpful error messages
             let errorMessage = 'Sorry, there was an error importing your wallet.';
             if (error.message.includes('Invalid private key format')) {
                 errorMessage = `❌ Invalid private key format.\n\nPlease ensure your private key is in one of these formats:\n• Base58 (87-88 characters)\n• Base64 (88 characters)\n• Hex (128 characters, with or without 0x prefix)\n• Array format [n1,n2,n3...]`;
@@ -426,8 +413,6 @@ Your wallet has been imported and is ready to use.`;
             }
             
             await this.sendAndStoreMessage(chatId, errorMessage);
-            
-            // Clear the user state on error
             this.bot.userStates.delete(telegramId);
         }
     }
@@ -519,117 +504,94 @@ Are you sure you want to proceed?`;
     }
 
     async handleConfirmExport(chatId, telegramId, walletId) {
+    try {
+        const user = await this.db.getUserByTelegramId(telegramId);
+        const wallet = await this.db.getWalletById(walletId, user.id);
+
+        if (!wallet) {
+            await this.sendAndStoreMessage(chatId, 'Wallet not found.');
+            return;
+        }
+
+        // Decrypt the private key
+        const privateKeyStr = this.decryptPrivateKey(wallet.encrypted_private_key, telegramId);
+        let privateKeyArray;
+
         try {
-            const user = await this.db.getUserByTelegramId(telegramId);
-            const wallet = await this.db.getWalletById(walletId, user.id);
-
-            if (!wallet) {
-                await this.sendAndStoreMessage(chatId, 'Wallet not found.');
-                return;
+            privateKeyArray = JSON.parse(privateKeyStr);
+        } catch (e) {
+            const Buffer = require('buffer').Buffer;
+            let buf = null;
+            if (/^[A-Za-z0-9+/=]+$/.test(privateKeyStr) && privateKeyStr.length === 88) {
+                buf = Buffer.from(privateKeyStr, 'base64');
+            } else if (/^\d+(,\d+)*$/.test(privateKeyStr)) {
+                buf = Buffer.from(privateKeyStr.split(',').map(n => parseInt(n.trim())));
+            } else {
+                throw new Error("Unknown private key format! Contact support.");
             }
+            privateKeyArray = Array.from(buf);
+        }
 
-            // Decrypt the private key
-            const privateKey = this.decryptPrivateKey(wallet.encrypted_private_key, telegramId);
+        if (!privateKeyArray || privateKeyArray.length !== 64) {
+            throw new Error("Private key is not 64 bytes long. Cannot export.");
+        }
 
-            const message = `
+        const privateKeyBase58 = bs58.encode(Uint8Array.from(privateKeyArray));
+
+        const message = `
 *🔑 Private Key Export*
 
 *Wallet:* \`${wallet.public_key}\`
 
-*Private Key:*
-\`${privateKey}\`
+*Private Key (Base58, for Phantom/Sollet/Backpack):*
+\`${privateKeyBase58}\`
+
+*Advanced (Uint8Array/JSON, for developers):*
+\`${JSON.stringify(privateKeyArray)}\`
 
 ⚠️ *IMPORTANT:*
 - Save this key securely immediately
 - Delete this message after saving
 - Never share this key with anyone
-- You are responsible for its security`;
+- You are responsible for its security
+`;
 
-            const keyboard = {
-                inline_keyboard: [
-                    [
-                        { text: '🗑️ Delete This Message', callback_data: 'delete_export_message' }
-                    ],
-                    [
-                        { text: '✅ I\'ve Saved It', callback_data: 'export_keys' }
-                    ]
+        const keyboard = {
+            inline_keyboard: [
+                [
+                    { text: '🗑️ Delete This Message', callback_data: 'delete_export_message' }
+                ],
+                [
+                    { text: '✅ I\'ve Saved It', callback_data: 'export_keys' }
                 ]
-            };
+            ]
+        };
 
-            const sentMessage = await this.sendAndStoreMessage(chatId, message, {
-                parse_mode: 'Markdown',
-                reply_markup: keyboard
-            });
+        const sentMessage = await this.sendAndStoreMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard
+        });
 
-            // Auto-delete after 5 minutes for security
-            setTimeout(async () => {
-                try {
-                    await this.bot.deleteMessage(chatId, sentMessage.message_id);
-                } catch (error) {
-                    console.error('Error auto-deleting export message:', error);
-                }
-            }, 5 * 60 * 1000);
-
-        } catch (error) {
-            console.error('Error in handleConfirmExport:', error);
-            await this.sendAndStoreMessage(chatId, 'Sorry, something went wrong while exporting the key.');
-        }
-    }
-
-    async handleSwitchWallet(chatId, telegramId) {
-        try {
-            const user = await this.db.getUserByTelegramId(telegramId);
-            const wallets = await this.db.getWalletsByUserId(user.id);
-
-            if (wallets.length === 0) {
-                await this.sendAndStoreMessage(chatId, 'No wallets found. Please create or import a wallet first.');
-                return;
+        // Optionally, auto-delete the message after 5 minutes
+        setTimeout(async () => {
+            try {
+                await this.bot.deleteMessage(chatId, sentMessage.message_id);
+            } catch (error) {
+                console.error('Error auto-deleting export message:', error);
             }
+        }, 5 * 60 * 1000);
 
-            if (wallets.length === 1) {
-                await this.sendAndStoreMessage(chatId, 'You only have one wallet. No need to switch.');
-                return;
-            }
-
-            const message = `
-*🔄 Switch Wallet*
-
-Select a wallet to make it active:`;
-
-            const keyboard = {
-                inline_keyboard: [
-                    ...wallets.map(wallet => [
-                        { 
-                            text: `${wallet.is_active ? '✅' : '📱'} ${wallet.public_key.slice(0, 8)}...${wallet.public_key.slice(-8)}`, 
-                            callback_data: `switch_to_${wallet.id}` 
-                        }
-                    ]),
-                    [
-                        { text: '◀️ Back', callback_data: 'wallet_management' }
-                    ]
-                ]
-            };
-
-            await this.sendAndStoreMessage(chatId, message, {
-                parse_mode: 'Markdown',
-                reply_markup: keyboard
-            });
-        } catch (error) {
-            console.error('Error in handleSwitchWallet:', error);
-            await this.sendAndStoreMessage(chatId, 'Sorry, something went wrong while loading wallets.');
-        }
+    } catch (error) {
+        console.error('Error in handleConfirmExport:', error);
+        await this.sendAndStoreMessage(chatId, 'Sorry, something went wrong while exporting the key.');
     }
+}
 
     async handleWalletSwitch(chatId, telegramId, walletId) {
         try {
             const user = await this.db.getUserByTelegramId(telegramId);
-            
-            // Deactivate all wallets for this user
             await this.db.deactivateAllWallets(user.id);
-            
-            // Activate the selected wallet
             await this.db.activateWallet(walletId, user.id);
-            
             const wallet = await this.db.getWalletById(walletId, user.id);
 
             const message = `
@@ -670,7 +632,6 @@ You can now trade with this wallet.`;
                 return;
             }
 
-            // Get the wallet by public key
             const wallets = await this.db.getWalletsByUserId(user.id);
             const targetWallet = wallets.find(w => w.public_key === publicKey);
             
@@ -679,7 +640,6 @@ You can now trade with this wallet.`;
                 return;
             }
 
-            // Set this wallet as active
             await this.db.setActiveWallet(user.id, targetWallet.id);
 
             const message = `
@@ -712,94 +672,69 @@ You can now use this wallet for trading.`;
         }
     }
 
-    // Main wallet actions router
-    async handleWalletActions(ctx) {
+   async handleWalletActions(ctx) {
+        // --- CRITICAL FIX: Ensure callbackData is declared and assigned first ---
+        const callbackData = ctx.callbackQuery.data; 
         const chatId = ctx.chat.id;
         const telegramId = ctx.from.id.toString();
-        const callbackData = ctx.callbackQuery.data;
-
+        
+        console.log('[DEBUG] Entered handleWalletActions with callbackData:', callbackData);
+        
+        // This is the action derived from the callback (e.g., 'create', 'import', 'switch')
+        const action = callbackData.split('_')[0]; 
+        
         try {
-            // Route based on callback data
+            // --- Direct actions ---
             if (callbackData === 'create_wallet') {
                 await this.handleCreateWallet(chatId, telegramId);
-                return;
-            }
+                return true;
+            } 
             
             if (callbackData === 'import_wallet') {
                 await this.handleImportWallet(chatId, telegramId);
-                return;
-            }
+                return true;
+            } 
             
             if (callbackData === 'export_keys') {
                 await this.handleExportKeys(chatId, telegramId);
-                return;
-            }
+                return true;
+            } 
             
             if (callbackData === 'switch_wallet') {
-                await this.handleSwitchWallet(chatId, telegramId);
-                return;
+                await this.handleSwitchWalletMenu(chatId, telegramId);
+                return true;
             }
+
+            // --- Logic for selecting a specific wallet to switch to or export ---
             
             if (callbackData.startsWith('export_wallet_')) {
                 const walletId = callbackData.replace('export_wallet_', '');
                 await this.handleWalletExport(chatId, telegramId, walletId);
-                return;
+                return true;
             }
-            
+
             if (callbackData.startsWith('confirm_export_')) {
                 const walletId = callbackData.replace('confirm_export_', '');
                 await this.handleConfirmExport(chatId, telegramId, walletId);
-                return;
+                return true;
             }
             
-            if (callbackData.startsWith('switch_to_')) {
-                const walletId = callbackData.replace('switch_to_', '');
-                // Check if it's a public key (from wallet import) or wallet ID (from switch menu)
-                if (walletId.length > 20) {
-                    // It's likely a public key
-                    await this.handleSwitchToWallet(chatId, telegramId, walletId);
+            if (callbackData.startsWith('switch_wallet_') || callbackData.startsWith('switch_to_')) {
+                const identifier = callbackData.replace('switch_wallet_', '').replace('switch_to_', '');
+                
+                if (identifier.length > 20) {
+                    await this.handleSwitchToWallet(chatId, telegramId, identifier);
                 } else {
-                    // It's likely a wallet ID
-                    await this.handleWalletSwitch(chatId, telegramId, walletId);
+                    await this.handleWalletSwitch(chatId, telegramId, identifier);
                 }
-                return;
+                return true;
             }
-            
-            // Handle security-related wallet actions - delegate to SecurityHandlers if needed
-            if (callbackData.startsWith('security_wallet_') ||
-                callbackData.startsWith('passphrase_wallet_') ||
-                callbackData.startsWith('unlock_wallet_') ||
-                callbackData.startsWith('lock_wallet_') ||
-                callbackData === 'wallet_security' ||
-                callbackData === 'wallet_passphrase') {
-                // These should be handled by SecurityHandlers
-                console.log('Security-related wallet action should be handled by SecurityHandlers:', callbackData);
-                return;
-            }
-            
-            // Handle other wallet-related callbacks
-            if (callbackData === 'delete_export_message') {
-                // Try to delete the export message if possible
-                try {
-                    const messageId = this.lastMessageIds.get(chatId);
-                    if (messageId) {
-                        await this.bot.deleteMessage(chatId, messageId);
-                    }
-                } catch (error) {
-                    console.error('Error deleting export message:', error);
-                }
-                return;
-            }
-            
+
             if (callbackData === 'keys_saved') {
-                // User confirmed they saved their keys, show main menu or next steps
+                // Logic to delete old message and show the new menu
                 const message = `
 *✅ Keys Saved Successfully!*
-
-Your wallet is now ready to use. You can start trading or view your portfolio.
-
-*What would you like to do next?*`;
-
+Your wallet is now ready to use.`;
                 const keyboard = {
                     inline_keyboard: [
                         [
@@ -817,8 +752,9 @@ Your wallet is now ready to use. You can start trading or view your portfolio.
                     reply_markup: keyboard
                 });
 
-                // Delete the message with the private key for security
+                // Delete the wallet creation message
                 try {
+                    // Assuming lastWalletMessageId is part of 'this' or accessible
                     if (this.lastWalletMessageId) {
                         await this.bot.deleteMessage(chatId, this.lastWalletMessageId);
                         this.lastWalletMessageId = null;
@@ -826,41 +762,35 @@ Your wallet is now ready to use. You can start trading or view your portfolio.
                 } catch (error) {
                     console.error('Error deleting wallet creation message:', error);
                 }
-                return;
+                return true;
             }
-            
-            console.warn('Unhandled wallet action:', callbackData);
+
+            // If the action is not handled here, return false for the main router
+            return false;
             
         } catch (error) {
-            console.error('Error in handleWalletActions:', error);
-            await this.sendAndStoreMessage(chatId, 'Sorry, there was an error processing your wallet request.');
+            console.error('Error processing handleWalletActions callback:', error);
+            await this.bot.answerCallbackQuery(ctx.callbackQuery.id, 'Error processing request.');
+            await this.sendAndStoreMessage(chatId, 'A critical error occurred during wallet management.');
+            return true; 
         }
     }
 
-    // Helper methods
     validatePrivateKeyFormat(privateKey) {
         const cleaned = privateKey.trim();
-        
-        // Check for base58 format (typical length 87-88)
         if (cleaned.length >= 87 && cleaned.length <= 88) {
             try {
-                // Basic base58 character check
                 return /^[1-9A-HJ-NP-Za-km-z]+$/.test(cleaned);
             } catch {
                 return false;
             }
         }
-        
         return false;
     }
 
     validateWalletAddress(address) {
         try {
-            const bs58Module = require('bs58');
-            const bs58 = bs58Module.default || bs58Module;
-            // Check if it's a valid base58 string
             const decoded = bs58.decode(address);
-            // Solana addresses are 32 bytes
             return decoded.length === 32;
         } catch (error) {
             return false;
@@ -872,36 +802,72 @@ Your wallet is now ready to use. You can start trading or view your portfolio.
         const keypair = Keypair.generate();
         return {
             publicKey: keypair.publicKey.toString(),
-            privateKey: Buffer.from(keypair.secretKey).toString('base64')
+            privateKey: Array.from(keypair.secretKey)
         };
     }
 
+    async handleSwitchWalletMenu(chatId, telegramId) {
+    try {
+        const user = await this.db.getUserByTelegramId(telegramId);
+        if (!user) {
+            await this.sendAndStoreMessage(chatId, 'User not found.');
+            return;
+        }
+        const wallets = await this.db.getWalletsByUserId(user.id);
+
+        if (!wallets || wallets.length === 0) {
+            await this.sendAndStoreMessage(chatId, 'You have no wallets to switch.');
+            return;
+        }
+
+        const message = `
+*🔄 Switch Wallet*
+
+Select a wallet to activate:`;
+
+        const keyboard = {
+            inline_keyboard: [
+                ...wallets.map(wallet => [
+                    {
+                        text: `${wallet.public_key.slice(0, 8)}...${wallet.public_key.slice(-8)}${wallet.is_active ? ' (Active)' : ''}`,
+                        callback_data: `switch_wallet_${wallet.id}`
+                    }
+                ]),
+                [
+                    { text: '◀️ Back', callback_data: 'wallet_management' }
+                ]
+            ]
+        };
+
+        await this.sendAndStoreMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: keyboard
+        });
+    } catch (error) {
+        console.error('Error in handleSwitchWalletMenu:', error);
+        await this.sendAndStoreMessage(chatId, 'Sorry, something went wrong while showing your wallets.');
+    }
+}
+
     encryptPrivateKey(privateKey, userId) {
-        const crypto = require('crypto');
         const algorithm = 'aes-256-cbc';
         const key = crypto.scryptSync(userId, 'salt', 32);
         const iv = crypto.randomBytes(16);
-        
         const cipher = crypto.createCipheriv(algorithm, key, iv);
         let encrypted = cipher.update(privateKey, 'utf8', 'hex');
         encrypted += cipher.final('hex');
-        
         return iv.toString('hex') + ':' + encrypted;
     }
 
     decryptPrivateKey(encryptedKey, userId) {
-        const crypto = require('crypto');
         const algorithm = 'aes-256-cbc';
         const key = crypto.scryptSync(userId, 'salt', 32);
-        
         const parts = encryptedKey.split(':');
         const iv = Buffer.from(parts[0], 'hex');
         const encrypted = parts[1];
-        
         const decipher = crypto.createDecipheriv(algorithm, key, iv);
         let decrypted = decipher.update(encrypted, 'hex', 'utf8');
         decrypted += decipher.final('utf8');
-        
         return decrypted;
     }
 

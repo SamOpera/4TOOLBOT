@@ -16,3 +16,4 @@ yarn-error.log*
 4tool.db
 autonomous_trading.log
 .env 
+.env

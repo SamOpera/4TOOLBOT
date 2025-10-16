@@ -292,30 +292,44 @@ class WebhookServer {
     }
 
     async initializeBot() {
-        try {
-            // Create bot instance without polling
-            this.bot = new TelegramBot(this.config.telegram.token, { polling: false });
-            
-            // Set webhook if URL is provided and valid HTTPS, unless explicitly skipped
-            const skipSet = (process.env.TELEGRAM_SKIP_SET_WEBHOOK || '').toLowerCase() === 'true';
-            const url = this.config.telegram.webhook;
-            if (url) {
-                if (skipSet) {
-                    this.logger.warn('Skipping setWebHook due to TELEGRAM_SKIP_SET_WEBHOOK=true');
-                } else if (typeof url === 'string' && url.startsWith('https://')) {
-                    await this.setWebhook();
-                } else {
-                    this.logger.error('TELEGRAM_WEBHOOK_URL must be HTTPS in webhook-only mode. Set a valid URL or set TELEGRAM_SKIP_SET_WEBHOOK=true for local testing.');
-                }
-            }
+    try {
+        // Create bot instance without polling
+        this.bot = new TelegramBot(this.config.telegram.token, { polling: false });
 
-            this.logger.info('Webhook bot initialized successfully');
-            this.botInitialized = true;
-        } catch (error) {
-            this.logger.error('Failed to initialize webhook bot:', error);
-            throw error;
+        // Add Telegram shortcut commands (slash commands)
+        this.bot.setMyCommands([
+            { command: 'start', description: 'Start using the bot' },
+            { command: 'wallet', description: 'Manage your Solana wallet' },
+            { command: 'strategy', description: 'Configure trading strategies' },
+            { command: 'portfolio', description: 'View your holdings and P&L' },
+            { command: 'claim', description: 'Claim 4TOOL fee rewards' },
+            { command: 'status', description: 'Check bot status' },
+            { command: 'help', description: 'Show this help message' },
+            { command: 'buy', description: 'Buy a token' },
+            { command: 'sell', description: 'Sell a token' },
+            { command: 'set', description: 'Open settings menu' }
+        ]);
+
+        // Set webhook if URL is provided and valid HTTPS, unless explicitly skipped
+        const skipSet = (process.env.TELEGRAM_SKIP_SET_WEBHOOK || '').toLowerCase() === 'true';
+        const url = this.config.telegram.webhook;
+        if (url) {
+            if (skipSet) {
+                this.logger.warn('Skipping setWebHook due to TELEGRAM_SKIP_SET_WEBHOOK=true');
+            } else if (typeof url === 'string' && url.startsWith('https://')) {
+                await this.setWebhook();
+            } else {
+                this.logger.error('TELEGRAM_WEBHOOK_URL must be HTTPS in webhook-only mode. Set a valid URL or set TELEGRAM_SKIP_SET_WEBHOOK=true for local testing.');
+            }
         }
+
+        this.logger.info('Webhook bot initialized successfully');
+        this.botInitialized = true;
+    } catch (error) {
+        this.logger.error('Failed to initialize webhook bot:', error);
+        throw error;
     }
+}
 
     // Method to wait for bot initialization
     async waitForBotInitialization() {

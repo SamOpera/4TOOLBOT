@@ -56,59 +56,59 @@ Please create or import a wallet to get started.`;
                 return;
             }
 
-            let portfolioValue = 0;
-            let totalValue = 0;
-            let solBalance = 0;
-            let tokenCount = 0;
-            let tokenValue = 0;
-            let solPrice = 0;
-            
-            try {
-                // Get comprehensive wallet data using Helius service
-                const walletSummary = await this.heliusService.getWalletSummary(currentActiveWallet.public_key);
-                console.log('Wallet summary:', walletSummary);
+                let portfolioValue = 0;
+                let totalValue = 0;
+                let solBalance = 0;
+                let tokenCount = 0;
+                let tokenValue = 0;
+                let solPrice = 0;
                 
-                // Extract native SOL balance
-                solBalance = walletSummary.summary.nativeBalance / 1e9; // Convert from lamports to SOL
-                
-                // Get fungible token count and estimated value
-                tokenCount = walletSummary.summary.fungibleTokenCount;
-                
-                // Fetch SOL price from CoinGecko for accurate USD calculation
                 try {
-                    const cgResp = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', {
-                        timeout: 5000 // 5 second timeout
-                    });
-                    if (cgResp.data && cgResp.data.solana && cgResp.data.solana.usd) {
-                        solPrice = cgResp.data.solana.usd;
-                        
-                        // Calculate accurate SOL value using real-time price
-                        const solValue = solBalance * solPrice;
-                        
-                        // For now, use only SOL value since Helius total includes SOL
-                        // TODO: Implement proper token price fetching for accurate token values
-                        totalValue = solValue;
-                        portfolioValue = totalValue;
-                    } else {
-                        // Fallback to Helius estimated value if CoinGecko fails
+                    // Get comprehensive wallet data using Helius service
+                    const walletSummary = await this.heliusService.getWalletSummary(currentActiveWallet.public_key);
+                    console.log('Wallet summary:', walletSummary);
+                    
+                    // Extract native SOL balance
+                    solBalance = walletSummary.summary.nativeBalance / 1e9; // Convert from lamports to SOL
+                    
+                    // Get fungible token count and estimated value
+                    tokenCount = walletSummary.summary.fungibleTokenCount;
+                    
+                    // Fetch SOL price from CoinGecko for accurate USD calculation
+                    try {
+                        const cgResp = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd', {
+                            timeout: 5000 // 5 second timeout
+                        });
+                        if (cgResp.data && cgResp.data.solana && cgResp.data.solana.usd) {
+                            solPrice = cgResp.data.solana.usd;
+                            
+                            // Calculate accurate SOL value using real-time price
+                            const solValue = solBalance * solPrice;
+                            
+                            // For now, use only SOL value since Helius total includes SOL
+                            // TODO: Implement proper token price fetching for accurate token values
+                            totalValue = solValue;
+                            portfolioValue = totalValue;
+                        } else {
+                            // Fallback to Helius estimated value if CoinGecko fails
+                            totalValue = walletSummary.summary.totalEstimatedValue;
+                            portfolioValue = totalValue;
+                        }
+                    } catch (priceError) {
+                        console.error('Error fetching SOL price from CoinGecko:', priceError.message);
+                        // Fallback to Helius estimated value
                         totalValue = walletSummary.summary.totalEstimatedValue;
                         portfolioValue = totalValue;
                     }
-                } catch (priceError) {
-                    console.error('Error fetching SOL price from CoinGecko:', priceError.message);
-                    // Fallback to Helius estimated value
-                    totalValue = walletSummary.summary.totalEstimatedValue;
-                    portfolioValue = totalValue;
-                }
-                
-            } catch (e) {
-                console.error('Error fetching wallet data from Helius:', e);
-                // Fallback to basic balance check
-                try {
-                    const basicBalance = await getWalletBalance(currentActiveWallet.public_key);
-                    solBalance = basicBalance.sol;
-                    tokenCount = 0;
-                    tokenValue = 0;
+                    
+                } catch (e) {
+                    console.error('Error fetching wallet data from Helius:', e);
+                    // Fallback to basic balance check
+                    try {
+                        const basicBalance = await getWalletBalance(currentActiveWallet.public_key);
+                        solBalance = basicBalance.sol;
+                        tokenCount = 0;
+                        tokenValue = 0;
                     
                     // Try to get SOL price for basic calculation
                     try {
@@ -134,47 +134,70 @@ Please create or import a wallet to get started.`;
                 }
             }
 
-            const message = `
-*🤖 4T-Bot Main Menu*
+            // --- 24h Change Calculation: ADD THIS BLOCK ---
+            const { PortfolioOperations } = require('../database/operations');
+            const portfolioOps = new PortfolioOperations(this.db);
+            let change24h = 0;
+            if (user) {
+                const value24hAgo = await portfolioOps.getPortfolioValue24hAgo(user.id);
+                if (value24hAgo && value24hAgo > 0) {
+                    change24h = ((totalValue - value24hAgo) / value24hAgo) * 100;
+                }
+            }
+            // --- END 24h Change Calculation ---
+    const fullAddress = currentActiveWallet.public_key;
 
-*Active Wallet:* \`${currentActiveWallet.public_key}\`
-*Status:* ${currentActiveWallet.is_locked ? '🔒 Locked' : '🔓 Unlocked'}
-*Autonomous Mode:* ${isAutonomousMode ? '🟢 ON' : '🔴 OFF'}
+const message = `
+🤖 4T-Bot Main Menu
 
-*Portfolio Overview:*
+Active Wallet: \`${fullAddress}\`
+
+_Tap the wallet address to copy_ ☝️
+
+Status: ${currentActiveWallet.is_locked ? '🔒 Locked' : '🔓 Unlocked'}
+Autonomous Mode: ${isAutonomousMode ? '🟢 ON' : '🔴 OFF'}
+
+Portfolio Overview:
 💰 SOL Balance: ${solBalance.toFixed(4)} SOL
 💵 SOL Price: ${solPrice > 0 ? `$${solPrice.toFixed(2)}` : 'Unavailable'}
 🪙 Token Count: ${tokenCount} tokens
 📊 Total Value: $${totalValue.toFixed(2)}
-📈 24h Change: 0.00%
+📈 24h Change: ${change24h.toFixed(2)}%
 
-*Quick Actions:*`;
+Quick Actions:
+`;
+            // UPDATED: Buy and Sell buttons placed on the main dashboard
+         const keyboard = {
+  inline_keyboard: [
+    [ // First row: 3 buttons
+      { text: '🛒 Buy', callback_data: 'buy_token' },
+      { text: '💰 Sell', callback_data: 'sell_token' },
+      { text: '📈 Positions', callback_data: 'view_positions' }
+    ],
+    
+    [ // Third row: 2 buttons
+      { text: '📋 Rules', callback_data: 'rules' },
+      { text: '🏧 Withdraw', callback_data: 'withdraw' }
+     
+    ],
 
-            const keyboard = {
-                inline_keyboard: [
-                    [
-                        { text: '📊 Portfolio', callback_data: 'view_portfolio' },
-                    ],
-                    [
-                        { text: '⚡️ Trade', callback_data: 'trade' },
-                        { text: '🎯 Strategies', callback_data: 'strategies' }
-                    ],
-                    [
-                        { text: '📋 Rules', callback_data: 'rules' },
-                        { text: '⚙️ Settings', callback_data: 'settings' }
-                    ],
-                    [
-                        { 
-                            text: isAutonomousMode ? '🤖 Autonomous Mode: ON' : '🤖 Autonomous Mode: OFF',
-                            callback_data: 'toggle_autonomous'
-                        }
-                    ],
-                    [
-                        { text: '❓ Help', callback_data: 'help' }
-                    ]
-                ]
-            };
+    [ // Second row: 3 buttons (or 2 if you want)
+      { text: '📊 Portfolio', callback_data: 'view_portfolio' },
+      { text: '⚡️ Trade', callback_data: 'trade' },
+      { text: '🎯 Strategies', callback_data: 'strategies' }
+      // Remove one of the above if you want only 2 buttons on this line
+    ],
 
+    [ // Fourth row: 1 button
+      { text: isAutonomousMode ? '🤖 Autonomous Mode: ON' : '🤖 Autonomous Mode: OFF', callback_data: 'toggle_autonomous' }
+    ],
+    [ // Fifth row: 1 button
+      { text: '❓ Help', callback_data: 'help' },
+      { text: '⚙️ Settings', callback_data: 'settings' },
+      { text: '💎 Rewards', callback_data: 'rewards' }
+    ]
+  ]
+};
             const sentMessage = await this.messageManager.editMessageOrSend(
                 chatId, 
                 message, 

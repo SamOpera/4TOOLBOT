@@ -291,10 +291,17 @@ class CallbackRouter {
                 await this.handlers.bot.showMainMenu(chatId);
                 return;
             }
+// ... earlier code unchanged ...
 
             // Handle view portfolio action
             if (callbackData === 'view_portfolio') {
                 await this.handlers.portfolioHandlers.handleViewPortfolio(chatId, telegramId);
+                return;
+            }
+
+            // Handle view positions action (NEW)
+            if (callbackData === 'view_positions') {
+                await this.handlers.portfolioHandlers.handleViewPositions(chatId, telegramId);
                 return;
             }
 
@@ -303,6 +310,8 @@ class CallbackRouter {
                 await this.handlers.portfolioHandlers.handleEnhancedViewPortfolio(chatId, telegramId);
                 return;
             }
+
+
 
             // Handle detailed portfolio analysis action
             if (callbackData === 'portfolio_detailed_analysis') {
@@ -383,6 +392,7 @@ class CallbackRouter {
                 callbackData === 'import_wallet' ||
                 callbackData === 'export_keys' ||
                 callbackData === 'switch_wallet' ||
+                callbackData.startsWith('switch_wallet_') ||
                 callbackData === 'delete_export_message' ||
                 callbackData === 'keys_saved' ||
                 callbackData.startsWith('export_wallet_') ||

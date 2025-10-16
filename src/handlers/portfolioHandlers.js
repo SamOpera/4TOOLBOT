@@ -10,7 +10,241 @@ class PortfolioHandlers {
         
         // Initialize wallet holdings service
         this.holdingsService = new this.walletHoldingsService(config);
+
+        
     }
+
+    // ...existing class code above...
+
+    /**
+     * Show all positions as individual cards (for each token) for the user.
+     */
+   async handleViewPositions(chatId, telegramId) {
+    function fmtK(num) {
+        if (typeof num !== "number") return num;
+        if (Math.abs(num) >= 1000) return (num / 1000).toFixed(2) + "K";
+        return num.toFixed(4);
+    }
+    function fmtUSD(num) {
+        if (typeof num !== "number") return "$0";
+        return "$" + num.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    }
+    function fmtSOL(num) {
+        if (typeof num !== "number") return "0.0000 SOL";
+        return num.toFixed(4) + " SOL";
+    }
+    function pct(num) {
+        if (typeof num !== "number") return "";
+        return (num > 0 ? "+" : "") + num.toFixed(2) + "%";
+    }
+    function colorBox(num) {
+        if (typeof num !== "number") return "";
+        return num >= 0 ? "🟩🟩" : "🟥🟥";
+    }
+
+    try {
+        const user = await this.db.getUserByTelegramId(telegramId);
+        const wallets = await this.db.getWalletsByUserId(user.id);
+
+        if (!wallets || wallets.length === 0) {
+            await this.sendAndStoreMessage(chatId, '*No Wallets Found*\n\nPlease create or import a wallet first.');
+            return;
+        }
+
+        const PortfolioService = require('../services/portfolioService');
+        const TokenDataService = require('../services/tokenDataService');
+        const portfolioService = new PortfolioService(this.config);
+        const tokenDataService = new TokenDataService(this.config);
+
+        let positions = [];
+
+        for (const wallet of wallets) {
+            const walletBalance = await portfolioService.getWalletBalance(wallet.public_key);
+            // Only SPL tokens, no SOL in positions
+            for (const t of walletBalance.tokens) {
+                let symbol = t.mint.slice(0, 4) + '...' + t.mint.slice(-4);
+                let price, name = symbol, marketCap, avgEntry, avgEntryUsd;
+                let buysSol, buysUsd, buysCount;
+                let sellsSol, sellsUsd, sellsCount;
+                let pnlUsd, pnlUsdPct, pnlSol, pnlSolPct;
+                let balancePct, value;
+
+                try {
+                    const meta = await tokenDataService.getTokenData(t.mint);
+                    if (meta) {
+                        if (meta.symbol) symbol = meta.symbol;
+                        if (meta.name) name = meta.name;
+                        if (typeof meta.price === 'number') price = meta.price;
+                        if (typeof meta.marketCap === 'number') marketCap = meta.marketCap;
+                        if (typeof meta.avgEntry === 'number') avgEntry = meta.avgEntry;
+                        if (typeof meta.avgEntryUsd === 'number') avgEntryUsd = meta.avgEntryUsd;
+                        if (typeof meta.buysSol === 'number') buysSol = meta.buysSol;
+                        if (typeof meta.buysUsd === 'number') buysUsd = meta.buysUsd;
+                        if (typeof meta.buysCount === 'number') buysCount = meta.buysCount;
+                        if (typeof meta.sellsSol === 'number') sellsSol = meta.sellsSol;
+                        if (typeof meta.sellsUsd === 'number') sellsUsd = meta.sellsUsd;
+                        if (typeof meta.sellsCount === 'number') sellsCount = meta.sellsCount;
+                        if (typeof meta.pnlUsd === 'number') pnlUsd = meta.pnlUsd;
+                        if (typeof meta.pnlUsdPct === 'number') pnlUsdPct = meta.pnlUsdPct;
+                        if (typeof meta.pnlSol === 'number') pnlSol = meta.pnlSol;
+                        if (typeof meta.pnlSolPct === 'number') pnlSolPct = meta.pnlSolPct;
+                        if (typeof meta.balancePct === 'number') balancePct = meta.balancePct;
+                    }
+                } catch (e) {}
+                value = (t.amount || 0) * (price || 0);
+
+                positions.push({
+                    symbol,
+                    name,
+                    amount: t.amount,
+                    price,
+                    value,
+                    mint: t.mint,
+                    marketCap,
+                    avgEntry,
+                    avgEntryUsd,
+                    buysSol,
+                    buysUsd,
+                    buysCount,
+                    sellsSol,
+                    sellsUsd,
+                    sellsCount,
+                    pnlUsd,
+                    pnlUsdPct,
+                    pnlSol,
+                    pnlSolPct,
+                    balancePct
+                });
+            }
+        }
+
+        if (positions.length === 0) {
+            await this.sendAndStoreMessage(chatId, 'No token positions found in your wallets.');
+            // still show the trading menu buttons for UX:
+            const keyboard = {
+                inline_keyboard: [
+                    [
+                        { text: "🛒 Buy", callback_data: "buy_token" },
+                        { text: "💰 Sell", callback_data: "sell_token" }
+                    ],
+                    [
+                        { text: "◀️ Back to Main Menu", callback_data: "main_menu" }
+                    ]
+                ]
+            };
+            await this.sendAndStoreMessage(chatId, "What would you like to do?", {
+                reply_markup: keyboard
+            });
+            return;
+        }
+
+        // Send each position card
+        for (const pos of positions) {
+            let msg = `*${pos.symbol}* - 📈 ${fmtSOL(pos.amount)} (${fmtUSD(pos.value)})\n`;
+            msg += `\`${pos.mint}\`\n`;
+
+            // Price & MC
+            if (typeof pos.price === "number" || typeof pos.marketCap === "number") {
+                msg += `• Price & MC: `;
+                msg += typeof pos.price === "number" ? fmtUSD(pos.price) : "$0";
+                msg += typeof pos.marketCap === "number" ? ` — $${fmtK(pos.marketCap)}` : "";
+                msg += '\n';
+            }
+
+            // Avg Entry
+            msg += `• Avg Entry: `;
+            if (typeof pos.avgEntry === "number" || typeof pos.avgEntryUsd === "number") {
+                msg += typeof pos.avgEntry === "number" ? fmtUSD(pos.avgEntry) : "";
+                msg += typeof pos.avgEntryUsd === "number" ? ` — ${fmtUSD(pos.avgEntryUsd)}` : "";
+            } else {
+                msg += "No avg entry yet";
+            }
+            msg += '\n';
+
+            // Balance
+            msg += `• Balance: ${fmtK(pos.amount)}`;
+            if (typeof pos.balancePct === "number") msg += ` (${pct(pos.balancePct)})`;
+            msg += '\n';
+
+            // Buys
+            if (typeof pos.buysSol === "number" || typeof pos.buysUsd === "number" || typeof pos.buysCount === "number") {
+                let buysLine = [];
+                if (typeof pos.buysSol === "number") buysLine.push(fmtSOL(pos.buysSol));
+                if (typeof pos.buysUsd === "number") buysLine.push(`(${fmtUSD(pos.buysUsd)})`);
+                buysLine.push(`(${pos.buysCount || 0} buys)`);
+                msg += `• Buys: ${buysLine.join(" ")}\n`;
+            } else {
+                msg += `• Buys: No trades yet\n`;
+            }
+
+            // Sells
+            if (typeof pos.sellsSol === "number" || typeof pos.sellsUsd === "number" || typeof pos.sellsCount === "number") {
+                let sellsLine = [];
+                if (typeof pos.sellsSol === "number") sellsLine.push(fmtSOL(pos.sellsSol));
+                if (typeof pos.sellsUsd === "number") sellsLine.push(`(${fmtUSD(pos.sellsUsd)})`);
+                sellsLine.push(`(${pos.sellsCount || 0} sells)`);
+                msg += `• Sells: ${sellsLine.join(" ")}\n`;
+            } else {
+                msg += `• Sells: No trades yet\n`;
+            }
+
+            // PNL USD
+            if (typeof pos.pnlUsdPct === "number" || typeof pos.pnlUsd === "number") {
+                msg += `• PNL USD: `;
+                if (typeof pos.pnlUsdPct === "number") msg += `${pct(pos.pnlUsdPct)} `;
+                if (typeof pos.pnlUsd === "number") msg += `(${fmtUSD(pos.pnlUsd)}) `;
+                if (typeof pos.pnlUsdPct === "number") msg += `${colorBox(pos.pnlUsdPct)}`;
+                msg += '\n';
+            } else {
+                msg += `• PNL USD: No realized PNL yet\n`;
+            }
+
+            // PNL SOL
+            if (typeof pos.pnlSolPct === "number" || typeof pos.pnlSol === "number") {
+                msg += `• PNL SOL: `;
+                if (typeof pos.pnlSolPct === "number") msg += `${pct(pos.pnlSolPct)} `;
+                if (typeof pos.pnlSol === "number") msg += `(${fmtSOL(pos.pnlSol)}) `;
+                if (typeof pos.pnlSolPct === "number") msg += `${colorBox(pos.pnlSolPct)}`;
+                msg += '\n';
+            } else {
+                msg += `• PNL SOL: No realized PNL yet\n`;
+            }
+
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: "PNL Card 🖼️", callback_data: `download_card_${pos.mint}` }]
+                ]
+            };
+
+            await this.sendAndStoreMessage(chatId, msg, {
+                parse_mode: "Markdown",
+                reply_markup: keyboard,
+                disable_web_page_preview: true
+            });
+        }
+
+        // After all cards, show a single trading actions panel
+        const keyboard = {
+            inline_keyboard: [
+                [
+                    { text: "🛒 Buy", callback_data: "buy_token" },
+                    { text: "💰 Sell", callback_data: "sell_token" },
+                    { text: '❓ Help', callback_data: 'help' },
+                ],
+                [
+                    { text: "◀️ Back to Main Menu", callback_data: "main_menu" }
+                ]
+            ]
+        };
+        await this.sendAndStoreMessage(chatId, "What would you like to do next?", {
+            reply_markup: keyboard
+        });
+
+    } catch (error) {
+        console.error('Error viewing positions:', error);
+        await this.sendAndStoreMessage(chatId, 'Sorry, something went wrong while showing your positions.');
+    }
+}
 
     async handleViewPortfolio(chatId, telegramId) {
         try {
@@ -137,7 +371,7 @@ Please create or import a wallet first to view your portfolio.`;
             }
 
             // Add SOL as a holding
-            allHoldings['SOL'] = { amount: solTotal, symbol: 'SOL', price: solPrice, marketCap: null, volume24h: null, name: 'Solana' };
+            allHoldings['SOL'] = { amount: solTotal, symbol: 'SOL', price: solPrice,volume24h: null, name: 'Solana' };
 
             // Debug: Log SOL calculation
             console.log(`[Portfolio Debug] SOL Total: ${solTotal}, SOL Price: ${solPrice}, SOL Value: ${solTotal * solPrice}`);

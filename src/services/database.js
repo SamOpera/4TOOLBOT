@@ -29,8 +29,27 @@ class DatabaseService {
             )
         `);
 
+        // Create trades table for trade history
+        this.db.exec(`
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                wallet TEXT,
+                token_address TEXT,
+                trade_type TEXT,
+                amount REAL,
+                price REAL,
+                total_value REAL,
+                fee_amount REAL,
+                status TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
         console.log('Database tables initialized successfully');
     }
+
+    // --- User State Methods ---
 
     async getUserState(userId) {
         try {
@@ -70,6 +89,8 @@ class DatabaseService {
             return false;
         }
     }
+
+    // --- Rules Methods ---
 
     async saveRule(userId, rule) {
         try {
@@ -132,6 +153,76 @@ class DatabaseService {
             return false;
         }
     }
+
+    // --- Trade History Methods ---
+
+    async createTradeHistory(trade) {
+        try {
+            const stmt = this.db.prepare(`
+                INSERT INTO trades (user_id, wallet, token_address, trade_type, amount, price, total_value, fee_amount, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `);
+            stmt.run(
+                trade.user_id,
+                trade.wallet || null,
+                trade.token_address,
+                trade.trade_type,
+                trade.amount,
+                trade.price,
+                trade.total_value,
+                trade.fee_amount,
+                trade.status
+            );
+            return true;
+        } catch (error) {
+            console.error('Error saving trade:', error);
+            return false;
+        }
+    }
+
+    async getTradesByUser(userId, limit = 10) {
+        try {
+            const stmt = this.db.prepare(`
+                SELECT * FROM trades WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?
+            `);
+            return stmt.all(userId, limit);
+        } catch (error) {
+            console.error('Error fetching trades:', error);
+            return [];
+        }
+    }
+
+    async getTradeStatsByUser(userId) {
+        try {
+            const stmt = this.db.prepare(`
+                SELECT 
+                    COUNT(*) AS total_trades,
+                    SUM(CASE WHEN trade_type = 'BUY' THEN 1 ELSE 0 END) AS buy_trades,
+                    SUM(CASE WHEN trade_type = 'SELL' THEN 1 ELSE 0 END) AS sell_trades,
+                    SUM(CASE WHEN status = 'EXECUTED' THEN 1 ELSE 0 END) AS successful_trades,
+                    SUM(CASE WHEN trade_type = 'SELL' THEN total_value ELSE 0 END) 
+                        - SUM(CASE WHEN trade_type = 'BUY' THEN total_value ELSE 0 END) AS total_pnl
+                FROM trades
+                WHERE user_id = ?
+            `);
+            const stats = stmt.get(userId) || {};
+            // Calculate win rate
+            stats.win_rate = stats.successful_trades && stats.total_trades
+                ? ((stats.successful_trades / stats.total_trades) * 100).toFixed(2)
+                : "0.00";
+            return stats;
+        } catch (error) {
+            console.error('Error calculating trade stats:', error);
+            return {
+                total_trades: 0,
+                buy_trades: 0,
+                sell_trades: 0,
+                successful_trades: 0,
+                total_pnl: 0,
+                win_rate: "0.00"
+            };
+        }
+    }
 }
 
-module.exports = new DatabaseService(); 
+module.exports = new DatabaseService();

@@ -134,7 +134,7 @@ Please confirm your order:`;
             if (!pendingBuy || pendingBuy.status !== 'ready_to_execute') {
                 throw new Error('No pending buy found or buy not ready to execute');
             }
-
+   
             // Convert amount to number and validate
             solAmount = parseFloat(amount);
             if (isNaN(solAmount) || solAmount <= 0) {
