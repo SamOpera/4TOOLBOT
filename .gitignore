@@ -17,3 +17,15 @@ yarn-error.log*
 autonomous_trading.log
 .env 
 .env
+database.sqlite
+*.log
+*.save
+*.swp
+.history/
+.lh/
+database.sqlite
+*.log
+*.save
+*.swp
+.history/
+.lh/
